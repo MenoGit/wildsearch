@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Environment variables
+.env
+.env.*
+
+# Crawler output
+data/
+edges.csv
+adjacency_matrix.csv
+whoosh_index/
+
+# macOS
+.DS_Store
