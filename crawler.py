@@ -18,6 +18,10 @@ import urllib.request
 
 #settings
 
+SKIP_URLS = {
+    "https://www.fws.gov/policy/library/2019/2019-27334.html"
+}
+
 SEED_URLS = [
     "https://wdfw.wa.gov/hunting",
     "https://myodfw.com/",
@@ -32,7 +36,7 @@ ALLOWED_DOMAINS = {
     "www.nps.gov"
 }
 
-MAX_PAGES = 15 
+MAX_PAGES = 100_000 
 DELAY = 1.0                            #seconds between requests
 TIMEOUT = 10                           #seconds before giving up on a page
 USER_AGENT = "CS454StudentCrawler/1.0"
@@ -40,7 +44,7 @@ DATA_DIR = "data"
 PAGES_DIR = "data/pages"
 
 CHECKPOINT_FILE = os.path.join(DATA_DIR, "checkpoint.json") 
-CHECKPOINT_INTERVAL = 2 
+CHECKPOINT_INTERVAL = 100 
 
 
 #html parsing
@@ -317,6 +321,9 @@ def crawl(seed_urls, allowed_domains, max_pages):
     paused = False
     while len(queue) > 0 and len(url_to_id) < max_pages:
         url = queue.popleft()      #off the front so it's fifo which is bfs
+        if url in SKIP_URLS:
+            print("Skipped: Known unavailable URL", url)
+            continue
         
         domain = urlparse(url).netloc
         robot = robots.get(domain)
