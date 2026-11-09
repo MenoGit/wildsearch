@@ -1,7 +1,5 @@
 """
-CS454 Assignment 1 - Web Crawler
-Emmanuel Ornelas Saucedo
-
+Web Crawler
 Run with:  python3 crawler.py
 """
 
@@ -13,6 +11,8 @@ from collections import deque
 from html.parser import HTMLParser
 from urllib.parse import urljoin, urldefrag, urlparse, quote
 from urllib.robotparser import RobotFileParser
+from urllib.error import HTTPError
+from email.utils import parsedate_to_datetime
 import urllib.request
 
 
@@ -32,12 +32,15 @@ ALLOWED_DOMAINS = {
     "www.nps.gov"
 }
 
-MAX_PAGES = 5
+MAX_PAGES = 15 
 DELAY = 1.0                            #seconds between requests
 TIMEOUT = 10                           #seconds before giving up on a page
 USER_AGENT = "CS454StudentCrawler/1.0"
 DATA_DIR = "data"
 PAGES_DIR = "data/pages"
+
+CHECKPOINT_FILE = os.path.join(DATA_DIR, "checkpoint.json") 
+CHECKPOINT_INTERVAL = 2 
 
 
 #html parsing
@@ -111,29 +114,77 @@ def load_robots(site):
     return robots
 
 
+def get_retry_delay(error):
+    retry_after = error.headers.get("Retry-After")
+    if retry_after:
+        try:
+            return max(0, int(retry_after))
+        except ValueError:
+            try:
+                retry_time = parsedate_to_datetime(retry_after)
+                return max(0, retry_time.timestamp()-time.time())
+            except (ValueError, TypeError, OverflowError):
+                pass
+    return 10.0
+
 def download(url):
-    #the html, or None to skip it, one bad page can't stop the crawl
-    try:
-        request = urllib.request.Request(
-                url,
-                headers={"User-Agent": USER_AGENT}
-                )
-        with opener.open(request, timeout=TIMEOUT) as response:
-            if "text/html" not in response.headers.get("Content-Type", ""):
-                print("Skipped: non-HTML page " + url)
-                return None
-            return response.read().decode("utf-8", "replace")
-    except Exception as error:
-        print("Skipped: " + str(error) + " " + url)
-        return None
+    for attempt in range(2):
+        try:
+            request = urllib.request.Request(
+                    url,
+                    headers={"User-Agent": USER_AGENT}
+            )
+
+            with opener.open(request, timeout=TIMEOUT) as response:
+                if "text/html" not in response.headers.get("Content-Type", "").lower():
+                    print("Skipped: non-HTML page " + url)
+                    return None, None
+
+
+                html = response.read().decode("utf-8", "replace")
+                return "success", html
+
+        except HTTPError as error:
+            if error.code in (301, 302, 303, 307, 308):
+                location = error.headers.get("Location")
+
+                if location:
+                    destination = clean_url(url, location)
+                    print("Redirect:", url, "->", destination)
+                    return "redirect", destination
+            
+            if error.code in (429, 503):
+                delay = get_retry_delay(error)
+                if attempt == 0 and delay <= 60:
+                    print("HTTP", error.code, "- retrying after", delay, "seconds")
+                    time.sleep(delay)
+                    continue
+
+                print("HTTP", error.code, " - pausing crawl:", url)
+                return "pause", None
+
+            print("Skipped: HTTP", error.code, url)
+            return None, None
+        
+        except Exception as error:
+            print("Skipped:", error, url)
+            return None, None
 
 
 #saving
 
 def save_page(page_id, url, text):
-    out = open(PAGES_DIR + "/" + str(page_id) + ".json", "w", encoding="utf-8")
-    json.dump({"id": page_id, "url": url, "text": text}, out, ensure_ascii=False)
-    out.close()
+    path = os.path.join(PAGES_DIR, str(page_id) + ".json")
+    temp_path = path + ".tmp"
+
+    with open(temp_path, "w", encoding="utf-8") as file:
+        json.dump(
+                {"id": page_id, "url": url, "text": text},
+                file,
+                ensure_ascii=False
+        )
+    os.replace(temp_path, path)
+
 
 
 def save_urls(url_to_id):
@@ -181,17 +232,64 @@ def save_edges(graph, url_to_id):
                 if url in url_to_id:
                     writer.writerow([key,url_to_id[url]])
 
+def save_checkpoint(queue, seen, url_to_id, graph):
+    state = {
+            "queue": list(queue),
+            "seen": list(seen),
+            "url_to_id": url_to_id,
+            "graph": graph
+            }
+
+    temp_file = CHECKPOINT_FILE + ".tmp"
+
+    with open(temp_file, "w", encoding="utf-8") as file:
+        json.dump(state, file)
+
+    os.replace(temp_file, CHECKPOINT_FILE)
+
+    print("Checkpoint saved:", len(url_to_id), "pages")
+
+def load_checkpoint():
+    if not os.path.exists(CHECKPOINT_FILE):
+        return None
+
+    with open(CHECKPOINT_FILE, "r", encoding="utf-8") as file:
+        state = json.load(file)
+
+
+    state["queue"] = deque(state["queue"])
+    state["seen"] = set(state["seen"])
+
+    state["graph"] = {
+            int(key): value
+            for key, value in state["graph"].items()
+    }
+    return state
+
+
+    
+
 def crawl(seed_urls, allowed_domains, max_pages):
     """Crawl breadth-first from seed_urls, staying on allowed_domains,
     and stop after max_pages pages."""
     os.makedirs(PAGES_DIR, exist_ok=True)
 
-    queue = deque(seed_urls)
-    seen = set(seed_urls)          #already crawled or already in the queue
-    url_to_id = {}                 #crawled url -> page id
-    graph = {}                     #page id -> the links that page had
+    state = load_checkpoint()
+    if state is not None:
+        queue = state['queue']
+        seen = state["seen"]
+        url_to_id = state["url_to_id"]
+        graph = state["graph"]
+        print("Resuming from", len(url_to_id), "pages")
+    else:
+        queue = deque(seed_urls)
+        seen = set(seed_urls)          #already crawled or already in the queue
+        url_to_id = {}                 #crawled url -> page id
+        graph = {}                     #page id -> the links that page had
 
-    print("Starting crawler")
+        print("Starting a new crawl")
+
+    print("WildSearch crawler")
     print("Seed: " + ", ".join(seed_urls))
     print("Domain: " + ", ".join(allowed_domains))
     print("Target: " + str(max_pages))
@@ -216,6 +314,7 @@ def crawl(seed_urls, allowed_domains, max_pages):
 
     start = time.time()
 
+    paused = False
     while len(queue) > 0 and len(url_to_id) < max_pages:
         url = queue.popleft()      #off the front so it's fifo which is bfs
         
@@ -226,10 +325,31 @@ def crawl(seed_urls, allowed_domains, max_pages):
             print("Skipped: robots.txt disallowed " + url)
             continue
 
-        html = download(url)
+        status, result = download(url)
         time.sleep(DELAY)
-        if html is None:
+
+        if status == "pause":
+            queue.appendleft(url)
+            paused = True
+            print("Crawl paused, Progress will be saved.")
+            break
+
+        if status == "redirect":
+            destination = result
+
+            if is_allowed(destination, allowed_domains):
+                if destination not in seen:
+                    seen.add(destination)
+                    queue.append(destination)
+            else:
+                print("Skipped: redirect outside allowed domains", destination)
+
             continue
+
+        if status != "success":
+            continue
+
+        html = result
 
         parser = PageParser()
 
@@ -258,14 +378,23 @@ def crawl(seed_urls, allowed_domains, max_pages):
                 seen.add(link)
                 queue.append(link)
 
+        if len(url_to_id) % CHECKPOINT_INTERVAL == 0:
+            save_checkpoint(queue, seen, url_to_id, graph)
+
         print("[" + str(page_id + 1) + "/" + str(max_pages) + "] " +
               urlparse(url).path.replace("/wiki/", ""))
 
+
+
     print("")
+    save_checkpoint(queue, seen, url_to_id, graph)
     save_urls(url_to_id)
     save_edges(graph, url_to_id)
 
-    print("Crawl finished.")
+    if paused:
+        print("Crawl paused. You can resume later.")
+    else:
+        print("Crawl finished.")
     print("Pages crawled: " + str(len(url_to_id)))
     print("Time: " + str(int(time.time() - start)) + " seconds")
 
