@@ -37,15 +37,15 @@ ALLOWED_DOMAINS = {
     "www.nps.gov"
 }
 
-MAX_PAGES = 100_000 
+MAX_PAGES = 100_000
 DELAY = 1.0                            #seconds between requests
 TIMEOUT = 10                           #seconds before giving up on a page
 USER_AGENT = "CS454StudentCrawler/1.0"
 DATA_DIR = "data"
 PAGES_DIR = "data/pages"
 
-CHECKPOINT_FILE = os.path.join(DATA_DIR, "checkpoint.json") 
-CHECKPOINT_INTERVAL = 100 
+CHECKPOINT_FILE = os.path.join(DATA_DIR, "checkpoint.json")
+CHECKPOINT_INTERVAL = 100
 
 
 #html parsing
@@ -157,7 +157,7 @@ def download(url):
                     destination = clean_url(url, location)
                     print("Redirect:", url, "->", destination)
                     return "redirect", destination
-            
+
             if error.code in (429, 503):
                 delay = get_retry_delay(error)
                 if attempt == 0 and delay <= 60:
@@ -170,7 +170,7 @@ def download(url):
 
             print("Skipped: HTTP", error.code, url)
             return None, None
-        
+
         except Exception as error:
             print("Skipped:", error, url)
             return None, None
@@ -231,7 +231,7 @@ def save_edges(graph, url_to_id):
     with open('edges.csv', 'w', newline='', encoding='utf-8') as file:
         writer = csv.writer(file)
         writer.writerow(header)
-        
+
         for key in range(len(url_to_id)):
             for url in graph[key]:
                 if url in url_to_id:
@@ -278,8 +278,20 @@ def request_shutdown(signum, frame):
     shutdown_requested = True
     print("\n Shutdown has been requested. Safely shutdowning")
 
+def is_html_candidate(url):
+    not_candidate = (".pdf", ".png", ".jpg", ".jpeg",
+        ".gif", ".webp", ".svg",
+        ".zip", ".mp4", ".docx"
+    )
 
-    
+    path = urlparse(url).path.lower()
+    if path.endswith(not_candidate):
+        return False
+
+    return True
+
+
+
 
 def crawl(seed_urls, allowed_domains, max_pages):
     """Crawl breadth-first from seed_urls, staying on allowed_domains,
@@ -308,7 +320,7 @@ def crawl(seed_urls, allowed_domains, max_pages):
     print("")
 
     #robots = load_robots("https://" + urlparse(seed_urls[0]).netloc)
-    robots = {} 
+    robots = {}
 
     for seed_url in seed_urls:
         domain = urlparse(seed_url).netloc
@@ -339,7 +351,12 @@ def crawl(seed_urls, allowed_domains, max_pages):
         if url in SKIP_URLS:
             print("Skipped: Known unavailable URL", url)
             continue
-        
+
+        if not is_html_candidate(url):
+            print("Skipped: Non-HTML URL", url)
+            continue
+
+
         domain = urlparse(url).netloc
         robot = robots.get(domain)
 
@@ -389,7 +406,7 @@ def crawl(seed_urls, allowed_domains, max_pages):
         found = set()
         for href in parser.links:
             link = clean_url(url, href)
-            if link not in found and is_allowed(link, allowed_domains):
+            if link not in found and is_allowed(link, allowed_domains) and is_html_candidate(link):
                 found.add(link)
                 links.append(link)
         graph[page_id] = links
