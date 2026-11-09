@@ -12,6 +12,7 @@ from html.parser import HTMLParser
 from urllib.parse import urljoin, urldefrag, urlparse, quote
 from urllib.robotparser import RobotFileParser
 from urllib.error import HTTPError
+from email.utils import parsedate_to_datetime
 import urllib.request
 
 
@@ -113,37 +114,61 @@ def load_robots(site):
     return robots
 
 
+def get_retry_delay(error):
+    retry_after = error.headers.get("Retry-After")
+    if retry_after:
+        try:
+            return max(0, int(retry_after))
+        except ValueError:
+            try:
+                retry_time = parsedate_to_datetime(retry_after)
+                return max(0, retry_time.timestamp()-time.time())
+            except (ValueError, TypeError, OverflowError):
+                pass
+    return 10.0
+
 def download(url):
-    #the html, or None to skip it, one bad page can't stop the crawl
-    try:
-        request = urllib.request.Request(
-                url,
-                headers={"User-Agent": USER_AGENT}
-        )
+    for attempt in range(2):
+        try:
+            request = urllib.request.Request(
+                    url,
+                    headers={"User-Agent": USER_AGENT}
+            )
 
-        with opener.open(request, timeout=TIMEOUT) as response:
-            if "text/html" not in response.headers.get("Content-Type", "").lower():
-                print("Skipped: non-HTML page " + url)
-                return None, None
+            with opener.open(request, timeout=TIMEOUT) as response:
+                if "text/html" not in response.headers.get("Content-Type", "").lower():
+                    print("Skipped: non-HTML page " + url)
+                    return None, None
 
 
-            html = response.read().decode("utf-8", "replace")
-            return "success", html
+                html = response.read().decode("utf-8", "replace")
+                return "success", html
 
-    except HTTPError as error:
-        if error.code in (301, 302, 303, 307, 308):
-            location = error.headers.get("Location")
+        except HTTPError as error:
+            if error.code in (301, 302, 303, 307, 308):
+                location = error.headers.get("Location")
 
-            if location:
-                destination = clean_url(url, location)
-                print("Redirect:", url, "->", destination)
-                return "redirect", destination
-        print("Skipped: HTTP", error.code, url)
-        return None, None
-    
-    except Exception as error:
-        print("Skipped:", error, url)
-        return None, None
+                if location:
+                    destination = clean_url(url, location)
+                    print("Redirect:", url, "->", destination)
+                    return "redirect", destination
+            
+            if error.code in (429, 503):
+                delay = get_retry_delay(error)
+                if attempt == 0 and delay <= 60:
+                    print("HTTP", error.code, "- retrying after", delay, "seconds")
+                    time.sleep(delay)
+                    continue
+
+                print("HTTP", error.code, " - pausing crawl:", url)
+                return "pause", None
+
+            print("Skipped: HTTP", error.code, url)
+            return None, None
+        
+        except Exception as error:
+            print("Skipped:", error, url)
+            return None, None
 
 
 #saving
@@ -289,6 +314,7 @@ def crawl(seed_urls, allowed_domains, max_pages):
 
     start = time.time()
 
+    paused = False
     while len(queue) > 0 and len(url_to_id) < max_pages:
         url = queue.popleft()      #off the front so it's fifo which is bfs
         
@@ -301,6 +327,12 @@ def crawl(seed_urls, allowed_domains, max_pages):
 
         status, result = download(url)
         time.sleep(DELAY)
+
+        if status == "pause":
+            queue.appendleft(url)
+            paused = True
+            print("Crawl paused, Progress will be saved.")
+            break
 
         if status == "redirect":
             destination = result
@@ -359,7 +391,10 @@ def crawl(seed_urls, allowed_domains, max_pages):
     save_urls(url_to_id)
     save_edges(graph, url_to_id)
 
-    print("Crawl finished.")
+    if paused:
+        print("Crawl paused. You can resume later.")
+    else:
+        print("Crawl finished.")
     print("Pages crawled: " + str(len(url_to_id)))
     print("Time: " + str(int(time.time() - start)) + " seconds")
 
