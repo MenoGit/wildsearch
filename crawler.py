@@ -7,6 +7,7 @@ import os
 import csv
 import json
 import time
+import signal
 from collections import deque
 from html.parser import HTMLParser
 from urllib.parse import urljoin, urldefrag, urlparse, quote
@@ -270,6 +271,13 @@ def load_checkpoint():
     }
     return state
 
+shutdown_requested = False
+
+def request_shutdown(signum, frame):
+    global shutdown_requested
+    shutdown_requested = True
+    print("\n Shutdown has been requested. Safely shutdowning")
+
 
     
 
@@ -319,7 +327,14 @@ def crawl(seed_urls, allowed_domains, max_pages):
     start = time.time()
 
     paused = False
+    signal.signal(signal.SIGINT, request_shutdown)
+    signal.signal(signal.SIGTERM, request_shutdown)
+
     while len(queue) > 0 and len(url_to_id) < max_pages:
+        if shutdown_requested:
+            print("Stopping crawler and saving progress...")
+            break
+
         url = queue.popleft()      #off the front so it's fifo which is bfs
         if url in SKIP_URLS:
             print("Skipped: Known unavailable URL", url)
@@ -398,7 +413,11 @@ def crawl(seed_urls, allowed_domains, max_pages):
     save_urls(url_to_id)
     save_edges(graph, url_to_id)
 
-    if paused:
+
+    if shutdown_requested:
+        print("Crawl stopped safely. Ready to resume.")
+
+    elif paused:
         print("Crawl paused. You can resume later.")
     else:
         print("Crawl finished.")
