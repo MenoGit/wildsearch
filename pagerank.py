@@ -86,6 +86,24 @@ def save_ranks(ranks, output_file):
 
     print("PageRank saved to:", output_file)
 
+
+def load_ranks(ranks_file):
+    with open(ranks_file, "r", encoding="utf-8") as file:
+        ranks = json.load(file)
+    return ranks
+
+def rank_results(documents_ids, ranks, limits=10):
+    results = []
+    for document in documents_ids:
+        id = document["id"]
+        url = document["url"]
+        rank = ranks[int(id)]
+        results.append([id,url,rank])
+
+    results.sort(key=lambda x: x[2], reverse=True)
+
+    return results[:limits]
+
 if __name__ == "__main__":
     graph = load_graph("data/urls.json", "edges.csv")
 

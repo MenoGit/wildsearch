@@ -74,15 +74,20 @@ def write_documents_to_index(ix, pages_dir):
                 print(f"Warning: Failed to parse file {file_name}. Reason: {e}")
 
 
-def search_index(ix, query_str, limit, conjunctive):
+def search_index(ix, query_str, limit, conjunctive, option="All"):
     parser = configure_query_parser(ix, conjunctive=conjunctive)
     parsed_query = parser.parse(query_str)
     
     with ix.searcher() as searcher:
         results = searcher.search(parsed_query, limit=limit)
         total_matches = len(results)
-        hits_list = [hit.fields() for hit in results]
+        hits_list = [{"id":hit["id"], "url": hit["url"]} for hit in results]
         return total_matches, hits_list
+
+
+
+
+ 
 
 
 def index_documents(pages_dir, index_dir):
