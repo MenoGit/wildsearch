@@ -73,6 +73,42 @@ def write_documents_to_index(ix, pages_dir):
             except Exception as e:
                 print(f"Warning: Failed to parse file {file_name}. Reason: {e}")
 
+def build_doc_mapping(ix):
+    mapping = {}
+
+    with ix.searcher() as searcher:
+        for docnum in searcher.reader().all_doc_ids():
+            fields = searcher.stored_fields(docnum)
+            mapping[docnum] = int(fields["id"])
+    return mapping
+
+def search_pagerank(ix, query_str, ranks, mapping, limit=10):
+
+    parser = configure_query_parser(ix, conjunctive=True)
+    parsed_query = parser.parse(query_str)
+
+    with ix.searcher() as searcher:
+
+        matching_docs = searcher.docs_for_query(parsed_query)
+        results = []
+
+        for docnum in matching_docs:
+            crawler_id = mapping[docnum]
+            score = ranks[crawler_id];
+            results.append((docnum, score))
+
+        total_matches = len(results)
+
+        results.sort(key=lambda x: x[1], reverse=True)
+
+        top_docs = results[:limit]
+        top_results = []
+        for docnum, score in top_docs:
+            url = searcher.stored_fields(docnum)["url"]
+            top_results.append((url,score))
+        return total_matches, top_results 
+
+
 
 def search_index(ix, query_str, limit, conjunctive, option="All"):
     parser = configure_query_parser(ix, conjunctive=conjunctive)
@@ -84,10 +120,6 @@ def search_index(ix, query_str, limit, conjunctive, option="All"):
         hits_list = [{"id":hit["id"], "url": hit["url"]} for hit in results]
         return total_matches, hits_list
 
-
-
-
- 
 
 
 def index_documents(pages_dir, index_dir):
